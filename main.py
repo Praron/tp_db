@@ -15,5 +15,13 @@ def page_not_found(error):
         mimetype="application/json"
     )
 
+@app.errorhandler(409)
+def page_not_found(error):
+    return Response(
+        status=409,
+        response=json.dumps({'message': str(error)}),
+        mimetype="application/json"
+    )
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0')
