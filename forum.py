@@ -16,28 +16,28 @@ CONFLICT = 409
 CREATED = 201
 OK = 200
 
-class ProcessSafePoolManager:
-    def __init__(self, *args, **kwargs):
-        self.last_seen_process_id = getpid()
-        self.args = args
-        self.kwargs = kwargs
-        self._init()
+# class ProcessSafePoolManager:
+#     def __init__(self, *args, **kwargs):
+#         self.last_seen_process_id = getpid()
+#         self.args = args
+#         self.kwargs = kwargs
+#         self._init()
 
 
-    def _init(self):
-        self._pool = ThreadedConnectionPool(*self.args, **self.kwargs)
+#     def _init(self):
+#         self._pool = ThreadedConnectionPool(*self.args, **self.kwargs)
 
 
-    def getconn(self):
-        current_pid = getpid()
-        if not current_pid == self.last_seen_process_id:
-            self._init()
-            self.last_seen_process_id = current_pid
-        return self._pool.getconn()
+#     def getconn(self):
+#         current_pid = getpid()
+#         if not current_pid == self.last_seen_process_id:
+#             self._init()
+#             self.last_seen_process_id = current_pid
+#         return self._pool.getconn()
 
 
-    def putconn(self, conn):
-        return self._pool.putconn(conn)
+#     def putconn(self, conn):
+#         return self._pool.putconn(conn)
 
 # pool = ProcessSafePoolManager(1, 10, host='localhost', database='postgres', user='postgres', password='ident')
 
@@ -432,15 +432,14 @@ def create_vote(thread, user, voice):
         if old_voice is not None:
             delta = voice - old_voice
             if delta != 0:
-                sql = 'update threads set votes = votes + %s where id = %s'
-                cur.execute(sql, (delta, thread_id))
-                sql = 'update votes set voice = %s where user_id = %s and thread_id = %s'
-                cur.execute(sql, (voice, user_id, thread_id))
+                sql = '''select from threads where id = %(thread_id)s for update;
+                         update threads set votes = votes + %(delta)s where id = %(thread_id)s;
+                         update votes set voice = %(voice)s where user_id = %(user_id)s and thread_id = %(thread_id)s'''
+                cur.execute(sql, {'delta': delta, 'thread_id': thread_id, 'voice': voice, 'user_id': user_id})
         else:
-            sql = 'insert into votes (thread_id, user_id, voice) values (%s, %s, %s)'
-            cur.execute(sql, (thread_id, user_id, voice))
-            sql = 'update threads set votes = votes + %s where id = %s'
-            cur.execute(sql, (1, thread_id))
+            sql = '''insert into votes (thread_id, user_id, voice) values (%s, %s, %s);
+                     update threads set votes = votes + %s where id = %s'''
+            cur.execute(sql, (thread_id, user_id, voice, voice, thread_id))
 
 
 def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
