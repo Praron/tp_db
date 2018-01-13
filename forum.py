@@ -1,6 +1,6 @@
 from sys import stderr
+from os import getpid
 import pytz
-import re
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import numbers
@@ -8,6 +8,7 @@ from flask import Blueprint, request, Response, json, abort
 from connect_db import connect_DB
 import psycopg2
 import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
 
 forum_blueprint = Blueprint('forum', __name__)
 
@@ -15,9 +16,34 @@ CONFLICT = 409
 CREATED = 201
 OK = 200
 
+class ProcessSafePoolManager:
+    def __init__(self, *args, **kwargs):
+        self.last_seen_process_id = getpid()
+        self.args = args
+        self.kwargs = kwargs
+        self._init()
+
+
+    def _init(self):
+        self._pool = ThreadedConnectionPool(*self.args, **self.kwargs)
+
+
+    def getconn(self):
+        current_pid = getpid()
+        if not current_pid == self.last_seen_process_id:
+            self._init()
+            self.last_seen_process_id = current_pid
+        return self._pool.getconn()
+
+
+    def putconn(self, conn):
+        return self._pool.putconn(conn)
+
+# pool = ProcessSafePoolManager(1, 10, host='localhost', database='postgres', user='postgres', password='ident')
+
+conn = connect_DB()  # get from pool
 @contextmanager
 def get_DB_cursor():
-    conn = connect_DB()  # get from pool
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         # yield conn
@@ -29,7 +55,20 @@ def get_DB_cursor():
         conn.commit()
     finally:
         cur.close()
-        conn.close()  # return to pool
+        # conn.close()  # return to pool
+
+# @contextmanager
+# def get_DB_cursor():
+#     try:
+#         conn = pool.getconn()
+#         with conn:
+#             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+#                yield cur
+#     except:
+#         # conn.rollback()
+#         raise
+#     finally:
+#         pool.putconn(conn)
 
 
 def make_response(status, to_json):
@@ -118,25 +157,23 @@ def create_forum(user_id, title, slug):
 
 def replace_time_format(row):
     time = row['created']
-    # zone = pytz.timezone('Europe/Moscow')
-    # if time.tzinfo is None:
-    #     time = zone.localize(time)
     utc_time = time.astimezone(pytz.utc)
     row['created'] = utc_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
     return row
 
 
-def create_thread(user_id, forum_id, title, message, slug=None, created=None):
+def create_thread(user, forum, title, message, slug=None, created=None):
     with get_DB_cursor() as cur:
         created = created or str(datetime.now())
-        # cur.execute("SET TIME ZONE 'Europe/Moscow';")
         sql = f'''update forums set threads_count = threads_count + 1 where id = %(forum_id)s;
-                  insert into threads (user_id, forum_id, title, message, created
+                  insert into forum_user (user_id, forum_id)
+                    values (%(user_id)s, %(forum_id)s) on conflict do nothing;
+                  insert into threads (user_id, forum_id, title, message, created, user_nickname, forum_slug
                   {', slug' if slug else ''}) 
-                  values (%(user_id)s, %(forum_id)s, %(title)s, %(message)s, %(created)s {', %(slug)s' if slug else ''})
+                  values (%(user_id)s, %(forum_id)s, %(title)s, %(message)s, %(created)s, %(user_nickname)s, %(forum_slug)s {', %(slug)s' if slug else ''})
                   returning *'''
 
-        args = {'user_id': user_id, 'forum_id': forum_id, 'title': title, 'slug': slug, 'message': message, 'created': created}
+        args = {'user_id': user['id'], 'forum_id': forum['id'], 'title': title, 'slug': slug, 'message': message, 'created': created, 'user_nickname': user['nickname'], 'forum_slug': forum['slug']}
         cur.execute(sql, args)
         return replace_time_format(cur.fetchone())
 
@@ -193,25 +230,41 @@ def get_threads_info(forum_name, limit=None, since=None, is_desc=False):
             since = format(since, '%Y-%m-%d %H:%M:%S')
             since += ms
 
+        # sql = f'''
+        #     select
+        #         u.nickname as author,
+        #         t.created,
+        #         f.slug as forum,
+        #         t.id,
+        #         t.message,
+        #         t.slug,
+        #         t.title,
+        #         t.votes
+        #     from threads as t
+        #         join users as u on u.id = t.user_id
+        #         join forums as f on f.id = t.forum_id
+        #     where f.slug = %(forum)s
+        #     {f"and t.created {'<=' if is_desc else '>='} %(since)s" if since else ''}
+        #     order by t.created {'desc' if is_desc else ''}
+        #     {f'limit %(limit)s' if limit else ''}
+        #     '''
         sql = f'''
             select
-                u.nickname as author,
+                t.user_nickname as author,
                 t.created,
-                f.slug as forum,
+                t.forum_slug as forum,
                 t.id,
                 t.message,
                 t.slug,
                 t.title,
                 t.votes
             from threads as t
-                join users as u on u.id = t.user_id
-                join forums as f on f.id = t.forum_id
-            where f.slug = %(forum)s
+            where t.forum_slug = %(forum_slug)s
             {f"and t.created {'<=' if is_desc else '>='} %(since)s" if since else ''}
             order by t.created {'desc' if is_desc else ''}
             {f'limit %(limit)s' if limit else ''}
             '''
-        cur.execute(sql, {'forum': forum_name, 'since': since, 'limit': limit})
+        cur.execute(sql, {'forum_slug': forum_name, 'since': since, 'limit': limit})
         threads = cur.fetchall()
         return list(map(replace_time_format, threads))
 
@@ -219,18 +272,15 @@ def get_threads_info(forum_name, limit=None, since=None, is_desc=False):
 def get_forum_users_info(forum_id, limit=None, since=None, is_desc=False):
     with get_DB_cursor() as cur:
         sql = f'''
-            select distinct on (u.nickname)
+            select
                 u.nickname,
                 u.fullname,
                 u.email,
                 u.about
-            from forums as f
-                left join threads as t on t.forum_id = f.id
-                left join posts as p on p.thread_id = t.id
-                left join users as u on p.user_id = u.id or t.user_id = u.id
-            where f.id = %(forum_id)s and u.id is not null
+            from users as u 
+                inner join forum_user as fu on u.id = fu.user_id
+            where fu.forum_id = %(forum_id)s
             {f"and u.nickname {'<' if is_desc else '>'} %(since)s" if since else ''}
-            group by u.id
             order by u.nickname {'desc' if is_desc else ''}
             {f'limit %(limit)s' if limit else ''}
             '''
@@ -259,9 +309,9 @@ def get_post_info(post_id, what_to_show=None, thread_as_id=False):
     answer = {}
     with get_DB_cursor() as cur:
         sql = f'''
-            select u.nickname as author,
+            select p.user_nickname as author,
             p.created,
-            f.slug as forum,
+            p.forum_slug as forum,
             p.id,
             p.is_edited as "isEdited",
             p.message,
@@ -269,9 +319,7 @@ def get_post_info(post_id, what_to_show=None, thread_as_id=False):
             {'t.id' if thread_as_id else 't.slug'} as thread,
             t.id as thread_id
             from posts as p
-                join users as u on p.user_id = u.id
                 join threads as t on p.thread_id = t.id
-                join forums as f on t.forum_id = f.id
             where p.id = %s
             '''
         cur.execute(sql, (post_id,))
@@ -280,12 +328,10 @@ def get_post_info(post_id, what_to_show=None, thread_as_id=False):
         answer['post'] = replace_time_format(post)
 
         forum = None
-        user = None
         if is_author_need:
             user = get_user_or_404(nickname=post['author'])
             answer['author'] = user
         if is_thread_need:
-            # user = user or get_user_or_404(nickname=post['author'])
             forum = forum or get_forum_or_404(slug_or_id=post['forum'])
             thread = get_thread_or_404(forum_id=forum['id'], slug_or_id=(str(post['thread'] or post['thread_id'])))
             answer['thread'] = get_thread_info(thread, forum)
@@ -325,20 +371,26 @@ def get_forum_status():
         return answer
 
 
-def add_posts(thread_id, posts, forum_id):
+def add_posts(thread_id, posts, forum_id, forum_slug):
+    if not posts:
+        return []
     time = str(datetime.now())
     with get_DB_cursor() as cur:
+        posts_len = len(posts) - 1
         sql = f'''update forums set posts_count = posts_count + {len(posts)} where id = %s;
-             insert into posts (user_id, thread_id, message, created, parent_id) values
-             (%s, %s, %s, %s, %s){', (%s, %s, %s, %s, %s)' * (len(posts) - 1)} returning *'''
+             insert into forum_user (user_id, forum_id)
+                values (%s, %s) {', (%s, %s)' * posts_len} on conflict do nothing;
+             insert into posts (user_id, thread_id, message, created, parent_id, forum_slug, user_nickname) values
+             (%s, %s, %s, %s, %s, %s, %s) {', (%s, %s, %s, %s, %s, %s, %s)' * posts_len} returning *'''
         args = [forum_id]
-        if not posts:
-            return []
+        for post in posts:
+            user = get_user_or_404(nickname=post['author'])
+            args += (user['id'], forum_id)
         for post in posts:
             user = get_user_or_404(nickname=post['author'])
             if post.get('parent'):
                 get_parent_or_409(parent_id=post['parent'], thread_id=thread_id)                    
-            args += (user['id'], thread_id, post['message'], time, post.get('parent', 0))
+            args += (user['id'], thread_id, post['message'], time, post.get('parent', 0), forum_slug, post['author'])
         cur.execute(sql, args)
         return cur.fetchall()
 
@@ -391,25 +443,19 @@ def create_vote(thread, user, voice):
             cur.execute(sql, (1, thread_id))
 
 
-
 def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
     sort = sort or 'flat'
-    select_sql = '''
+    select_from_sql = '''
         select
-            u.nickname as author,
+            p.user_nickname as author,
             p.created,
-            f.slug as forum,
+            p.forum_slug as forum,
             p.id,
             p.is_edited as isEdited,
             p.message,
             p.parent_id as parent,
             p.thread_id as thread
-        '''
-    from_sql = '''
         from posts as p
-            left join users as u on p.user_id = u.id
-            left join threads as t on p.thread_id = t.id
-            left join forums as f on t.forum_id = f.id
         '''
     desc_sql = 'desc' if is_desc else ''
     limit_sql = 'limit %(limit)s' if limit else ''
@@ -420,8 +466,7 @@ def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
     with get_DB_cursor() as cur:
         if sort == 'flat':
             sql = f'''
-                {select_sql}
-                {from_sql}
+                {select_from_sql}
                 where p.thread_id = %(thread_id)s
                 {f'and p.id {compare_sign} %(since)s' if since else ''}
                 order by p.created {desc_sql},
@@ -431,8 +476,7 @@ def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
 
         elif sort == 'tree':
             sql = f'''
-                {select_sql}
-                {from_sql}
+                {select_from_sql}
                 where p.thread_id = %(thread_id)s
                 {since_sql}
                 order by p.parent_path {desc_sql}, p.id {desc_sql}
@@ -441,8 +485,7 @@ def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
 
         elif sort == 'parent_tree':
             sql = f'''
-                {select_sql}
-                {from_sql}
+                {select_from_sql}
                 where parent_path[2] in (select id from posts where thread_id = %(thread_id)s and parent_id = 0
                 {since_sql}
                 order by id {desc_sql}
@@ -452,12 +495,9 @@ def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
         cur.execute(sql, {'thread_id': thread['id'], 'since': since, 'limit': limit})
         return list(map(replace_time_format, cur.fetchall()))
 
-    pass
-
 
 @forum_blueprint.route('/forum/create', methods=['POST'])
 def _create_forum():
-    # data = {'user': 'shrek', 'slug': 'first-init', 'title': 'Title'}
     data = request.get_json()
 
     user = get_user_or_404(nickname=data['user'])
@@ -473,7 +513,6 @@ def _create_forum():
 
 @forum_blueprint.route('/forum/<slug>/create', methods=['POST'])
 def _create_thread(slug):
-    # data = {'author': 'shrek', 'created': '2017-01-01T00:00:00.000Z', 'title': 'Hello', 'message': 'World', 'slug': 'threadslug3'}
     data = request.get_json()
 
     thread_slug = data.get('slug')
@@ -487,7 +526,7 @@ def _create_thread(slug):
     status = CONFLICT
     if thread is None:
         status = CREATED
-        thread = create_thread(user['id'], forum['id'], data['title'], data['message'],
+        thread = create_thread(user, forum, data['title'], data['message'],
                                slug=thread_slug if thread_slug != '0' else '', created=data.get('created'))
 
     with_slug = data.get('slug') is not None
@@ -534,7 +573,6 @@ def get_post_details(p_id):
 def change_post_details(p_id):
     post = get_post_or_404(post_id=p_id)
     data = request.get_json()
-        
     return make_response(OK, change_post_message(p_id, data.get('message')))
 
 
@@ -552,24 +590,11 @@ def get_status():
 @forum_blueprint.route('/thread/<slug_or_id>/create', methods=['POST'])
 def create_posts(slug_or_id):
     data = request.get_json()
-    # data = '''[
-    #       {
-    #         "author": "shrek",
-    #         "message": "We should be afraid of the Kraken.",
-    #         "parent": 0
-    #       },
-    #       {
-    #         "author": "shrek",
-    #         "message": "We shouldn't be afraid of the Kraken.",
-    #         "parent": 0
-    #       }
-    #     ]'''
     thread = get_thread_or_404(slug_or_id=slug_or_id)
-    posts = add_posts(thread['id'], data, forum_id=thread['forum_id'])
-    # posts = [replace_time_format(get_post_info(p['id'], thread_as_id=True)['post']) for p in posts]
+    forum = get_forum_or_404(slug_or_id=thread['forum_id'])
+    posts = add_posts(thread['id'], data, forum_id=thread['forum_id'], forum_slug=forum['slug'])
     posts = [get_post_info(p['id'], thread_as_id=True)['post'] for p in posts]
     return make_response(CREATED, posts)
-    # return make_response(CREATED, list(map(replace_time_format, posts)))
 
 
 @forum_blueprint.route('/thread/<slug_or_id>/details', methods=['GET'])
@@ -582,10 +607,6 @@ def _get_thread_details(slug_or_id):
 def _change_thread(slug_or_id):
     thread = get_thread_or_404(slug_or_id=slug_or_id)
     data = request.get_json()
-    # data = {
-    #     'message': 'An urgent need to reveal the hiding place of Davy Jones. Who is willing to help in this matter?',
-    #     'title': 'Davy Jones cache'
-    #     }
     new_thread = change_thread(thread, data.get('message'), data.get('title'))
     return make_response(OK, get_thread_info(new_thread))
 
@@ -600,7 +621,6 @@ def _get_posts(slug_or_id):
     thread = get_thread_or_404(slug_or_id=slug_or_id)
     posts = get_posts(thread, limit, since, sort, desc == 'true')
 
-    # return make_response(OK, 'hello')
     return make_response(OK, posts)
 
     pass
@@ -609,7 +629,6 @@ def _get_posts(slug_or_id):
 @forum_blueprint.route('/thread/<slug_or_id>/vote', methods=['POST'])
 def _change_vote(slug_or_id):
     data = request.get_json()
-    # data = {'nickname': 'shrek', 'voice': '0'}
     thread = get_thread_or_404(slug_or_id=slug_or_id)
     user = get_user_or_404(nickname=data['nickname'])
     create_vote(thread, user, int(data['voice']))
@@ -620,11 +639,6 @@ def _change_vote(slug_or_id):
 @forum_blueprint.route('/user/<nickname>/create', methods=['POST'])
 def _create_user(nickname):
     data = request.get_json()
-    # data = {
-    #     'about': 'This is the day you will always remember as the day that you almost caught Captain Jack Sparrow!',
-    #     'email': 'captaina@blackpearl.sea',
-    #     'fullname': 'Captain Jack Sparrow'
-    #     }
 
     try:
         user = get_user_info_or_404(nickname=nickname, email=data['email'], in_list=True, with_nickname=True)
@@ -647,11 +661,6 @@ def _get_user_info(nickname):
 @forum_blueprint.route('/user/<nickname>/profile', methods=['POST'])
 def _change_user(nickname):
     data = request.get_json()
-    # data = {
-    #     'about': 'This is the day you will always remember as the day that you almost caught Captain Jack Sparrow!',
-    #     'email': 'captaina@blackpearl.sea',
-    #     'fullname': 'Captain Jack Sparrow'
-    #     }
 
     user = get_user_or_404(nickname=nickname)
     if data.get('email') and get_user_or_404(email=data['email'], abort404=False):
