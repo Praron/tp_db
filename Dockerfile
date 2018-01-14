@@ -9,6 +9,7 @@ RUN apt-get install -y python3.6 python3-pip postgresql-contrib-9.5
 ADD requirements.txt ./forum/
 ADD *.py ./forum/
 ADD db_init.sql ./
+ADD db_init.sql ./forum/
 
 RUN /usr/bin/python3.6 -m pip install -r forum/requirements.txt
 
