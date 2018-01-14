@@ -14,8 +14,8 @@ ADD db_init.sql ./forum/
 RUN /usr/bin/python3.6 -m pip install -r forum/requirements.txt
 
 RUN echo "listen_addresses='*'" >> /etc/postgresql/9.5/main/postgresql.conf &&\
-    echo "synchronous_commit=off" >> /etc/postgresql/9.5/main/postgresql.conf &&\
     echo "fsync = 'off'" >> /etc/postgresql/9.5/main/postgresql.conf &&\
+    echo "synchronous_commit=off" >> /etc/postgresql/9.5/main/postgresql.conf &&\
     echo "shared_buffers = 256MB" >> /etc/postgresql/9.5/main/postgresql.conf &&\
     echo "autovacuum = off" >> /etc/postgresql/9.5/main/postgresql.conf
 
