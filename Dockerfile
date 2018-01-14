@@ -1,7 +1,7 @@
 FROM ubuntu:16.04
 
 RUN apt-get -y update
-RUN apt-get install -y python3.5 python3-pip postgresql-contrib-9.5
+RUN apt-get install -y python3.6 python3-pip postgresql-contrib-9.5
 
 ADD requirements.txt ./forum/
 ADD *.py ./forum/
