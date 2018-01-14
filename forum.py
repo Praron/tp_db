@@ -225,29 +225,14 @@ def get_threads_info(forum_name, limit=None, since=None, is_desc=False):
     with get_DB_cursor() as cur:
         if since is not None:
             since = since.replace('T', ' ').replace('Z', '')
-            ms = since[-4:]
-            since = datetime.strptime(since[:-4], '%Y-%m-%d %H:%M:%S') + timedelta(hours=3)
-            since = format(since, '%Y-%m-%d %H:%M:%S')
-            since += ms
+            if since[-6] == '+' or since[-6] == '-':
+                since = since[:-3] + since[-2:]
+                # since = datetime.strptime(since, '%Y-%m-%d %H:%M:%S.%f%z') + timedelta(hours=3)
+            # else:
+            #     since += '000'
+                # since = datetime.strptime(since, '%Y-%m-%d %H:%M:%S.%f') + timedelta(hours=3)
+            # since = format(since, '%Y-%m-%d %H:%M:%S.%f')
 
-        # sql = f'''
-        #     select
-        #         u.nickname as author,
-        #         t.created,
-        #         f.slug as forum,
-        #         t.id,
-        #         t.message,
-        #         t.slug,
-        #         t.title,
-        #         t.votes
-        #     from threads as t
-        #         join users as u on u.id = t.user_id
-        #         join forums as f on f.id = t.forum_id
-        #     where f.slug = %(forum)s
-        #     {f"and t.created {'<=' if is_desc else '>='} %(since)s" if since else ''}
-        #     order by t.created {'desc' if is_desc else ''}
-        #     {f'limit %(limit)s' if limit else ''}
-        #     '''
         sql = f'''
             select
                 t.user_nickname as author,
@@ -432,7 +417,7 @@ def create_vote(thread, user, voice):
         if old_voice is not None:
             delta = voice - old_voice
             if delta != 0:
-                sql = '''select from threads where id = %(thread_id)s for update;
+                sql = '''--select from threads where id = %(thread_id)s for update;
                          update threads set votes = votes + %(delta)s where id = %(thread_id)s;
                          update votes set voice = %(voice)s where user_id = %(user_id)s and thread_id = %(thread_id)s'''
                 cur.execute(sql, {'delta': delta, 'thread_id': thread_id, 'voice': voice, 'user_id': user_id})
@@ -459,8 +444,11 @@ def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
     desc_sql = 'desc' if is_desc else ''
     limit_sql = 'limit %(limit)s' if limit else ''
     compare_sign = '<' if is_desc else '>'
+    compare_sign_reverce = '>' if is_desc else '<'
     since_sql = f'''and parent_path {compare_sign} (select parent_path
                                                       from posts where id = {since})''' if since else ''
+    since_sql_reverce = f'''and ((select parent_path
+                                 from posts where id = {since})''' if since else ''
 
     with get_DB_cursor() as cur:
         if sort == 'flat':
@@ -484,13 +472,21 @@ def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
 
         elif sort == 'parent_tree':
             sql = f'''
-                {select_from_sql}
-                where parent_path[2] in (select id from posts where thread_id = %(thread_id)s and parent_id = 0
-                {since_sql}
-                order by id {desc_sql}
-                {limit_sql}
-                ) order by parent_path {desc_sql}
+                select p2.user_nickname as author,
+            p2.created,
+            p2.forum_slug as forum,
+            p2.id,
+            p2.is_edited as isEdited,
+            p2.message,
+            p2.parent_id as parent,
+            p2.thread_id as thread
+                from (select id from posts where thread_id = %(thread_id)s and parent_id = 0
+                      {since_sql}
+                      order by id {desc_sql} {limit_sql}) as p1
+                    inner join (select * from posts as p2 where p2.parent_path[2] = any(select id from posts)) as p2 on p1.id = p2.parent_path[2]
+                order by p2.parent_path {desc_sql}
                 '''
+
         cur.execute(sql, {'thread_id': thread['id'], 'since': since, 'limit': limit})
         return list(map(replace_time_format, cur.fetchall()))
 

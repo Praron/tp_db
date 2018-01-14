@@ -3,9 +3,13 @@ drop index if exists forums_slug;
 drop index if exists forums_user_id;
 drop index if exists threads_slug;
 drop index if exists threads_user_id;
+drop index if exists threads_created;
+drop index if exists threads_forum_slug;
 drop index if exists posts_user_id;
 drop index if exists posts_thread_id;
 drop index if exists posts_parent_path;
+drop index if exists posts_parent_path_gin;
+drop index if exists posts_parent_path_2;
 drop index if exists votes_thread_id;
 drop index if exists forum_user_user_id;
 drop index if exists forum_user_forum_id;
@@ -57,6 +61,8 @@ create table threads (
 
 create index threads_slug on threads(slug);
 create index threads_user_id on threads(user_id);
+create index threads_created on threads(created);
+create index threads_forum_slug on threads(forum_slug);
 
 
 create table posts (
@@ -76,6 +82,8 @@ create table posts (
 create index posts_user_id on posts(user_id, id);
 create index posts_thread_id on posts(thread_id, id);
 create index posts_parent_path on posts(parent_path);
+create index posts_parent_path_gin on posts using gin (parent_path);
+create index posts_parent_path_2 on posts ((parent_path[2]));
 
 
 create table votes (
