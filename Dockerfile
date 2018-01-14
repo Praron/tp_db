@@ -20,7 +20,7 @@ RUN /etc/init.d/postgresql start &&\
 	psql --command "CREATE USER admin WITH SUPERUSER PASSWORD 'admin';" &&\
 	createdb -E UTF8 -T template0 forum &&\
 	psql forum --command "CREATE EXTENSION citext;" &&\
-    psql -U admin -d forum -a -f db_init.sql &&\
+    psql forum -a -f db_init.sql &&\
 	/etc/init.d/postgresql stop
 
 USER root
