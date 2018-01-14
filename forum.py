@@ -228,10 +228,10 @@ def get_threads_info(forum_name, limit=None, since=None, is_desc=False):
             if since[-6] == '+' or since[-6] == '-':
                 since = since[:-3] + since[-2:]
                 # since = datetime.strptime(since, '%Y-%m-%d %H:%M:%S.%f%z') + timedelta(hours=3)
-            # else:
-            #     since += '000'
-                # since = datetime.strptime(since, '%Y-%m-%d %H:%M:%S.%f') + timedelta(hours=3)
-            # since = format(since, '%Y-%m-%d %H:%M:%S.%f')
+            else:
+                since += '000'
+                since = datetime.strptime(since, '%Y-%m-%d %H:%M:%S.%f') + timedelta(hours=3)
+                since = format(since, '%Y-%m-%d %H:%M:%S.%f')
 
         sql = f'''
             select

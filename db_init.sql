@@ -21,7 +21,7 @@ drop table if exists threads cascade;
 drop table if exists posts cascade;
 drop table if exists forum_user cascade;
 drop trigger if exists set_parent_path on posts;
-drop function create_parent_path();
+drop function if exists create_parent_path();
 
 create table users (
     id serial primary key,
