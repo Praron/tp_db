@@ -487,6 +487,7 @@ def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
                 order by p2.parent_path {desc_sql}
                 '''
 
+        # print(cur.mogrify(sql, {'thread_id': thread['id'], 'since': since, 'limit': limit}).decode('utf-8'), file=stderr)
         cur.execute(sql, {'thread_id': thread['id'], 'since': since, 'limit': limit})
         return list(map(replace_time_format, cur.fetchall()))
 
