@@ -17,14 +17,14 @@ RUN echo "listen_addresses='*'" >> /etc/postgresql/9.5/main/postgresql.conf &&\
 
 USER postgres
 RUN /etc/init.d/postgresql start &&\
-	psql --command "CREATE USER admin WITH SUPERUSER PASSWORD 'admin';" &&\
-	createdb -E UTF8 -T template0 forum &&\
-	psql forum --command "CREATE EXTENSION citext;" &&\
+    psql --command "CREATE USER admin WITH SUPERUSER PASSWORD 'admin';" &&\
+    createdb -E UTF8 -T template0 forum &&\
+    psql forum --command "CREATE EXTENSION citext;" &&\
     psql forum -a -f db_init.sql &&\
-	/etc/init.d/postgresql stop
+    /etc/init.d/postgresql stop
 
 USER root
 EXPOSE 5000
 CMD /etc/init.d/postgresql start &&\
-	cd forum &&\
-	gunicorn -w 8 main:app --bind=0.0.0.0:5000
+    cd forum &&\
+    gunicorn -w 8 main:app --bind=0.0.0.0:5000
