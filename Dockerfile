@@ -18,9 +18,9 @@ RUN echo "listen_addresses='*'" >> /etc/postgresql/9.5/main/postgresql.conf &&\
 USER postgres
 RUN /etc/init.d/postgresql start &&\
 	psql --command "CREATE USER admin WITH SUPERUSER PASSWORD 'admin';" &&\
-	createdb -E UTF8 -T template0 tpdb &&\
-	psql tpdb --command "CREATE EXTENSION citext;" &&\
-    psql -U username -d myDataBase -a -f myInsertFile &&\
+	createdb -E UTF8 -T template0 forum &&\
+	psql forum --command "CREATE EXTENSION citext;" &&\
+    psql -U admin -d forum -a -f db_init.sql &&\
 	/etc/init.d/postgresql stop
 
 USER root
