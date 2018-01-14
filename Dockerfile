@@ -10,7 +10,7 @@ ADD requirements.txt ./forum/
 ADD *.py ./forum/
 ADD db_init.sql ./
 
-RUN /usr/lib/python3.6 -m pip install -r forum/requirements.txt
+RUN /usr/bin/python3.6 -m pip install -r forum/requirements.txt
 
 RUN echo "listen_addresses='*'" >> /etc/postgresql/9.5/main/postgresql.conf &&\
     echo "synchronous_commit=off" >> /etc/postgresql/9.5/main/postgresql.conf &&\
