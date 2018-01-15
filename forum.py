@@ -471,8 +471,8 @@ def get_posts(thread, limit=None, since=None, sort=None, is_desc=False):
                 '''
 
         elif sort == 'parent_tree':
-            sql = f''' set random_page_cost=0;
-                select p2.user_nickname as author,
+            sql = f''' set random_page_cost=0; set enable_hashjoin=false; set enable_mergejoin=false;
+            select p2.user_nickname as author,
             p2.created,
             p2.forum_slug as forum,
             p2.id,
