@@ -31,4 +31,4 @@ USER root
 EXPOSE 5000
 CMD /etc/init.d/postgresql start &&\
     cd forum &&\
-    gunicorn -w 8 main:app --bind=0.0.0.0:5000
+    gunicorn -w 8 -b 0.0.0.0:5000 main:app
